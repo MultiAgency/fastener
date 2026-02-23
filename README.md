@@ -1,17 +1,25 @@
-We're going to build a NEAR protocol app for an infinite drawing board inspired by the berryclub.io This repo is going to contain the following components:
-- The smart contract. It'll be actually, pretty simple, so don't design much of it, we'll just make a simplest wasm with a single method name `draw` tha completely ignores the
-  arguments. Again, we'll work on it later
-- The frontend. Should be static vite+react app that can be hosted on the cloudflare pages. I want the design to resemble google maps. The background is the drawing board, there is
-  a minimap on the bottom left, you can zoom in and zoom out (up to a limit). Your NEAR account/wallet is in the top-right in a cirlce. You have a color picker somewhere (and it can
-  switch between moving mode and drawing mode). Every active component (non-board) has a drop shadow. When you move the map the URL reflects the current center point (starting from
-  0,0). There is a grid visible at higher zoom levels. For mobile we want a read-only mode to work (scroll and see). The frontent will store the cache of the map in the local storage
-  to efficiently retrive it.
-- The indexer. It will read data from FastNear's neardata.xyz using `fastnear-neardata-fetcher` crate, filter function calls coming towards our contract, verify json and store them
-  in Redis queue of draw events. The redis will have autosave feature. We'll use valkey instead of redis binary.
-- The server. It will consume data from raw redis queue and update individual regions (e.g. 128x128) of the board. It'll also have a cache of recent board regions in memory for
-  retrieval. It'll also have a websocket for clients to subscribe and GET api for UI to read individual board pieces. For each board we'll store the last update timestamp, so clients
-  can efficiently request board updates, if they come back an hour later. Websockets will stream all drawing events, even outside the current view and frontends can just filter them
-  out.
+# Berry Fast
 
-The rules are the drawing board is non-erasable. Once someone draw something, they claim that pixel and only they can change it within 1 hour of drawing the pixel. Once the hour
-has passed the pixel becomes permanent. We'll use block_timestamp from the indexer to determine that.
+An infinite collaborative pixel drawing board on NEAR Protocol. Free to draw.
+
+**Website:** https://berry.fast
+**API:** https://api.berry.fastnear.com
+**Contract:** `berryfast.near`
+
+## Components
+
+- **Contract** (`contract/`) — Minimal NEAR smart contract with a single `draw()` method. Exists only so transactions can be sent; the indexer reads args directly from chain data.
+- **Indexer** (`backend/indexer/`) — Streams blocks from NEAR via `fastnear-neardata-fetcher`, filters draw calls, validates pixel JSON, and pushes events to a Valkey queue.
+- **Server** (`backend/server/`) — Axum HTTP/WebSocket server. Consumes draw events from the queue, applies ownership rules, updates region blobs in Valkey, and broadcasts live updates.
+- **Frontend** (`frontend/`) — Vite/React app. Full-viewport canvas with Google Maps-style pan/zoom, NEAR Wallet Selector for signing transactions, and IndexedDB caching.
+
+## Rules
+
+- Anyone can draw on an undrawn pixel
+- The owner can change their pixel within 1 hour
+- After 1 hour the pixel becomes permanent
+
+## Documentation
+
+- [API.md](API.md) — Full API reference (HTTP endpoints, WebSocket protocol, data formats)
+- [skill.md](https://berry.fast/skill.md) — Agent-readable skill file describing how to interact with Berry Fast programmatically
