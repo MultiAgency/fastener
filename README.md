@@ -16,7 +16,7 @@ An infinite collaborative pixel drawing board on NEAR Protocol. Free to draw.
 ## Rules
 
 - Anyone can draw on an undrawn pixel
-- The owner can change their pixel within 1 hour
+- Anyone can draw on top of another pixel for 1 hour (it resets the timer)
 - After 1 hour the pixel becomes permanent
 
 ## Documentation
