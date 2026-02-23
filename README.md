@@ -13,5 +13,4 @@ We're going to build a NEAR protocol app for an infinite drawing board inspired 
   can efficiently request board updates, if they come back an hour later. Websockets will stream all drawing events, even outside the current view and frontends can just filter them
   out.
 
-The rules are the drawing board is non-erasable. Once someone draw something, they claim that pixel and only they can change it within 1 hour of drawing the pixel. Once the hour
-has passed the pixel becomes permanent. We'll use block_timestamp from the indexer to determine that.
+The rules are the pixels on the drawing board becomes permanent if no one draw on top of them. We'll use block_timestamp from the indexer to determine that.
