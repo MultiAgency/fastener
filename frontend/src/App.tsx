@@ -8,7 +8,7 @@ import WalletButton from "./components/WalletButton";
 import Toolbar from "./components/Toolbar";
 import Minimap from "./components/Minimap";
 import ZoomControls from "./components/ZoomControls";
-import { REGION_SIZE, PIXEL_SIZE } from "./lib/constants";
+import { REGION_SIZE, PIXEL_SIZE, GRID_ZOOM_THRESHOLD } from "./lib/constants";
 import { resolveOwnerSync, resolveOwner } from "./lib/owner-cache";
 import type { DrawEventWS } from "./lib/types";
 
@@ -19,6 +19,8 @@ export default function App() {
   const [cursorCoords, setCursorCoords] = useState<{ x: number; y: number } | null>(null);
   const [hoveredAccount, setHoveredAccount] = useState<string | null>(null);
   const [drawBlocked, setDrawBlocked] = useState(false);
+  const [zoomAlert, setZoomAlert] = useState(false);
+  const zoomAlertTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Use a ref-based callback so useBoard can call handleDrawEvent without circular deps
   const drawEventCallbackRef = useRef<((event: DrawEventWS) => void) | null>(null);
@@ -61,6 +63,11 @@ export default function App() {
     drawEventCallbackRef.current = handleDrawEvent;
   }, [handleDrawEvent]);
 
+  // When zoomed out past the grid threshold, temporarily force move mode
+  const dpr = window.devicePixelRatio || 1;
+  const gridVisible = camera.zoom * dpr >= GRID_ZOOM_THRESHOLD;
+  const effectiveMode = mode === "draw" && !gridVisible ? "move" : mode;
+
   const handleCanvasSize = useCallback((w: number, h: number) => {
     setCanvasSize({ w, h });
   }, []);
@@ -69,6 +76,12 @@ export default function App() {
     setCursorCoords({ x: Math.floor(worldX), y: Math.floor(worldY) });
     setDrawBlocked(!canDrawAt(worldX, worldY));
   }, [canDrawAt]);
+
+  const handleDrawBlocked = useCallback(() => {
+    clearTimeout(zoomAlertTimer.current);
+    setZoomAlert(true);
+    zoomAlertTimer.current = setTimeout(() => setZoomAlert(false), 3000);
+  }, []);
 
   const handleMinimapNavigate = useCallback((worldX: number, worldY: number) => {
     setCamera((c) => ({ ...c, x: worldX, y: worldY }));
@@ -116,7 +129,7 @@ export default function App() {
       <Board
         camera={camera}
         regionImages={regionImages}
-        mode={mode}
+        mode={effectiveMode}
         pendingPixels={pendingPixels}
         regionDataRef={regionDataRef}
         openRegionsRef={openRegionsRef}
@@ -159,6 +172,8 @@ export default function App() {
         autoSubmit={autoSubmit}
         onSetAutoSubmit={setAutoSubmit}
         unsubmittedPixelCount={unsubmittedPixelCount}
+        gridVisible={gridVisible}
+        onDrawBlocked={handleDrawBlocked}
       />
 
       <Minimap
@@ -198,7 +213,7 @@ export default function App() {
         </div>
       )}
 
-      {fillError && (
+      {(fillError || zoomAlert) && (
         <div
           style={{
             position: "absolute",
@@ -214,7 +229,7 @@ export default function App() {
             boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
           }}
         >
-          {fillError}
+          {fillError || "Zoom in to draw"}
         </div>
       )}
     </>

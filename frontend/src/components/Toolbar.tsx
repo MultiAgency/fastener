@@ -24,6 +24,8 @@ interface Props {
   autoSubmit: boolean;
   onSetAutoSubmit: (v: boolean) => void;
   unsubmittedPixelCount: number;
+  gridVisible: boolean;
+  onDrawBlocked: () => void;
 }
 
 export default function Toolbar({
@@ -45,6 +47,8 @@ export default function Toolbar({
   autoSubmit,
   onSetAutoSubmit,
   unsubmittedPixelCount,
+  gridVisible,
+  onDrawBlocked,
 }: Props) {
   const [recentColors, setRecentColors] = useState<string[]>(() => {
     try {
@@ -97,7 +101,7 @@ export default function Toolbar({
 
   return (
     <div style={styles.wrapper}>
-    {mode === "draw" && recentColors.length > 0 && (
+    {mode === "draw" && gridVisible && recentColors.length > 0 && (
       <div style={styles.recentRow}>
         {recentColors.map((c) => (
           <button
@@ -129,15 +133,16 @@ export default function Toolbar({
           style={{
             ...styles.modeButton,
             ...(mode === "draw" ? styles.modeActive : {}),
+            ...(!gridVisible ? styles.disabledButton : {}),
           }}
-          onClick={() => onSetMode("draw")}
-          title="Draw mode"
+          onClick={() => gridVisible ? onSetMode("draw") : onDrawBlocked()}
+          title={gridVisible ? "Draw mode" : "Zoom in to draw"}
         >
           Draw
         </button>
       </div>
 
-      {mode === "draw" && (
+      {mode === "draw" && gridVisible && (
         <>
           <div style={{ position: "relative" }} ref={pickerRef}>
             <button
