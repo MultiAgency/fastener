@@ -1,237 +1,154 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { useCamera } from "./hooks/useCamera";
+import { useState, useCallback } from "react";
 import { useWallet } from "./hooks/useWallet";
-import { useBoard } from "./hooks/useBoard";
-import { useDrawing } from "./hooks/useDrawing";
-import Board from "./components/Board";
+import { useGraph } from "./hooks/useGraph";
+import { useContextEditor } from "./hooks/useContextEditor";
+import { ReactFlowProvider } from "@xyflow/react";
+import GraphView from "./components/GraphView";
 import WalletButton from "./components/WalletButton";
-import Toolbar from "./components/Toolbar";
-import Minimap from "./components/Minimap";
-import ZoomControls from "./components/ZoomControls";
-import { REGION_SIZE, PIXEL_SIZE, GRID_ZOOM_THRESHOLD } from "./lib/constants";
-import { resolveOwnerSync, resolveOwner } from "./lib/owner-cache";
-import type { DrawEventWS } from "./lib/types";
+import NamespaceList from "./components/NamespaceList";
+import NodeDetail from "./components/NodeDetail";
+import ContextToolbar from "./components/ContextToolbar";
+import TraceTimeline from "./components/TraceTimeline";
+import { DEFAULT_NAMESPACE } from "./lib/constants";
 
 export default function App() {
-  const { camera, setCamera, pan, zoomAt, zoomIn, zoomOut } = useCamera();
-  const { accountId, loading, signIn, signOut, callDraw } = useWallet();
-  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
-  const [cursorCoords, setCursorCoords] = useState<{ x: number; y: number } | null>(null);
-  const [hoveredAccount, setHoveredAccount] = useState<string | null>(null);
-  const [drawBlocked, setDrawBlocked] = useState(false);
-  const [zoomAlert, setZoomAlert] = useState(false);
-  const zoomAlertTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [activeNamespace, setActiveNamespace] = useState(DEFAULT_NAMESPACE);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  // Use a ref-based callback so useBoard can call handleDrawEvent without circular deps
-  const drawEventCallbackRef = useRef<((event: DrawEventWS) => void) | null>(null);
-  const onDrawEvent = useCallback((event: DrawEventWS) => {
-    drawEventCallbackRef.current?.(event);
-  }, []);
-
-  const pixelTimestampsRef = useRef<Map<string, number>>(new Map());
-  const { regionImages, regionDataRef, openRegionsRef } = useBoard(camera, canvasSize.w, canvasSize.h, onDrawEvent, pixelTimestampsRef);
-
+  const { accountId, loading, signIn, signOut, callCommit } = useWallet();
+  const { nodes, edges, namespaces, traces } = useGraph(activeNamespace);
   const {
-    mode,
-    setMode,
-    color,
-    setColor,
-    fillMode,
-    setFillMode,
-    fillError,
-    pendingPixels,
+    pendingMutations,
     isSending,
-    startDrawing,
-    stopDrawing,
-    addPixel,
-    fillAtPoint,
-    submitPixels,
-    clearPending,
-    handleDrawEvent,
+    addNode,
+    addEdge,
+    submit,
+    clear,
     undo,
-    redo,
     canUndo,
-    canRedo,
-    autoSubmit,
-    setAutoSubmit,
-    unsubmittedPixelCount,
-    canDrawAt,
-  } = useDrawing(callDraw, accountId, regionDataRef, openRegionsRef, pixelTimestampsRef);
+  } = useContextEditor(callCommit, activeNamespace);
 
-  // Wire the callback ref to the actual handler
-  useEffect(() => {
-    drawEventCallbackRef.current = handleDrawEvent;
-  }, [handleDrawEvent]);
+  const selectedNode = nodes.find((n) => n.id === selectedNodeId) || null;
 
-  // When zoomed out past the grid threshold, temporarily force move mode
-  const dpr = window.devicePixelRatio || 1;
-  const gridVisible = camera.zoom * dpr >= GRID_ZOOM_THRESHOLD;
-  const effectiveMode = mode === "draw" && !gridVisible ? "move" : mode;
-
-  const handleCanvasSize = useCallback((w: number, h: number) => {
-    setCanvasSize({ w, h });
+  const handleSelectNode = useCallback((nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
   }, []);
-
-  const handleCursorMove = useCallback((worldX: number, worldY: number) => {
-    setCursorCoords({ x: Math.floor(worldX), y: Math.floor(worldY) });
-    setDrawBlocked(!canDrawAt(worldX, worldY));
-  }, [canDrawAt]);
-
-  const handleDrawBlocked = useCallback(() => {
-    clearTimeout(zoomAlertTimer.current);
-    setZoomAlert(true);
-    zoomAlertTimer.current = setTimeout(() => setZoomAlert(false), 3000);
-  }, []);
-
-  const handleMinimapNavigate = useCallback((worldX: number, worldY: number) => {
-    setCamera((c) => ({ ...c, x: worldX, y: worldY }));
-  }, [setCamera]);
-
-  // Resolve hovered pixel's owner_id to account name
-  useEffect(() => {
-    if (!cursorCoords) {
-      setHoveredAccount(null);
-      return;
-    }
-    const { x, y } = cursorCoords;
-    const rx = Math.floor(x / REGION_SIZE);
-    const ry = Math.floor(y / REGION_SIZE);
-    const blob = regionDataRef.current?.get(`${rx}:${ry}`);
-    if (!blob) {
-      setHoveredAccount(null);
-      return;
-    }
-    const lx = ((x % REGION_SIZE) + REGION_SIZE) % REGION_SIZE;
-    const ly = ((y % REGION_SIZE) + REGION_SIZE) % REGION_SIZE;
-    const offset = (ly * REGION_SIZE + lx) * PIXEL_SIZE;
-    const view = new Uint8Array(blob);
-    const ownerId = view[offset + 3] | (view[offset + 4] << 8) | (view[offset + 5] << 16);
-    if (ownerId === 0) {
-      setHoveredAccount(null);
-      return;
-    }
-    // Try sync cache first
-    const cached = resolveOwnerSync(ownerId);
-    if (cached !== undefined) {
-      setHoveredAccount(cached);
-      return;
-    }
-    // Async fetch
-    let cancelled = false;
-    resolveOwner(ownerId).then((account) => {
-      if (!cancelled) setHoveredAccount(account);
-    });
-    return () => { cancelled = true; };
-  }, [cursorCoords, regionDataRef]);
 
   return (
-    <>
-      <Board
-        camera={camera}
-        regionImages={regionImages}
-        mode={effectiveMode}
-        pendingPixels={pendingPixels}
-        regionDataRef={regionDataRef}
-        openRegionsRef={openRegionsRef}
-        onPan={pan}
-        onZoomAt={zoomAt}
-        onStartDrawing={startDrawing}
-        onStopDrawing={stopDrawing}
-        onAddPixel={addPixel}
-        onPickColor={setColor}
-        onCanvasSize={handleCanvasSize}
-        fillMode={fillMode}
-        onFillAtPoint={fillAtPoint}
-        onCursorMove={handleCursorMove}
-        drawBlocked={drawBlocked}
-      />
-
-      <WalletButton
-        accountId={accountId}
-        loading={loading}
-        onSignIn={signIn}
-        onSignOut={signOut}
-      />
-
-      <Toolbar
-        mode={mode}
-        color={color}
-        pendingPixels={pendingPixels}
-        isSending={isSending}
-        accountId={accountId}
-        onSetMode={setMode}
-        onSetColor={setColor}
-        onSubmit={submitPixels}
-        onClear={clearPending}
-        onUndo={undo}
-        onRedo={redo}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        fillMode={fillMode}
-        onSetFillMode={setFillMode}
-        autoSubmit={autoSubmit}
-        onSetAutoSubmit={setAutoSubmit}
-        unsubmittedPixelCount={unsubmittedPixelCount}
-        gridVisible={gridVisible}
-        onDrawBlocked={handleDrawBlocked}
-      />
-
-      <Minimap
-        camera={camera}
-        regionImages={regionImages}
-        pendingPixels={pendingPixels}
-        canvasWidth={canvasSize.w}
-        canvasHeight={canvasSize.h}
-        openRegionsRef={openRegionsRef}
-        onNavigate={handleMinimapNavigate}
-        onCursorMove={handleCursorMove}
-      />
-
-      <ZoomControls onZoomIn={zoomIn} onZoomOut={zoomOut} />
-
-      {cursorCoords && (
+    <div style={{ display: "flex", width: "100%", height: "100%" }}>
+      {/* Sidebar */}
+      <div
+        style={{
+          width: 200,
+          background: "#0a0a14",
+          borderRight: "1px solid #1a1a2e",
+          display: "flex",
+          flexDirection: "column",
+          flexShrink: 0,
+        }}
+      >
         <div
           style={{
-            position: "absolute",
-            top: 16,
-            left: 16,
-            zIndex: 100,
-            background: "rgba(0, 0, 0, 0.5)",
-            color: "#fff",
-            padding: "4px 8px",
-            borderRadius: 6,
-            fontSize: 13,
-            fontFamily: "monospace",
-            pointerEvents: "none",
-            userSelect: "none",
+            padding: "12px",
+            borderBottom: "1px solid #1a1a2e",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
           }}
         >
-          {cursorCoords.x}, {cursorCoords.y}
-          {hoveredAccount && (
-            <div style={{ color: "#aaa", fontSize: 11 }}>{hoveredAccount}</div>
-          )}
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#e0e0e0" }}>
+            Fastener
+          </div>
+          <div style={{ fontSize: 10, color: "#3b82f6" }}>NEAR</div>
         </div>
-      )}
 
-      {(fillError || zoomAlert) && (
+        <NamespaceList
+          namespaces={namespaces}
+          activeNamespace={activeNamespace}
+          onSelectNamespace={setActiveNamespace}
+        />
+
+        <div style={{ padding: "12px", borderTop: "1px solid #1a1a2e" }}>
+          <div
+            style={{
+              fontSize: 10,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              color: "#666",
+              marginBottom: 8,
+              fontWeight: 600,
+            }}
+          >
+            Stats
+          </div>
+          <div style={{ color: "#aaa", fontSize: 12 }}>
+            {nodes.length} node{nodes.length !== 1 ? "s" : ""}
+          </div>
+          <div style={{ color: "#aaa", fontSize: 12 }}>
+            {edges.length} edge{edges.length !== 1 ? "s" : ""}
+          </div>
+          <div style={{ color: "#aaa", fontSize: 12 }}>
+            {traces.length} trace{traces.length !== 1 ? "s" : ""}
+          </div>
+        </div>
+
+        <div style={{ flex: 1 }} />
+      </div>
+
+      {/* Main content */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}>
+        <WalletButton
+          accountId={accountId}
+          loading={loading}
+          onSignIn={signIn}
+          onSignOut={signOut}
+        />
+
+        {/* Graph area */}
+        <div style={{ flex: 1, position: "relative" }}>
+          <ReactFlowProvider>
+            <GraphView
+              nodes={nodes}
+              edges={edges}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={handleSelectNode}
+            />
+          </ReactFlowProvider>
+
+          <ContextToolbar
+            onAddNode={addNode}
+            onAddEdge={addEdge}
+            onSubmit={submit}
+            onClear={clear}
+            onUndo={undo}
+            pendingCount={pendingMutations.length}
+            isSending={isSending}
+            canUndo={canUndo}
+            accountId={accountId}
+          />
+        </div>
+
+        {/* Trace timeline */}
         <div
           style={{
-            position: "absolute",
-            top: 24,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 200,
-            background: "rgba(200, 40, 40, 0.9)",
-            color: "#fff",
-            padding: "8px 20px",
-            borderRadius: 8,
-            fontSize: 14,
-            boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
+            height: 60,
+            background: "#0a0a14",
+            borderTop: "1px solid #1a1a2e",
+            flexShrink: 0,
           }}
         >
-          {fillError || "Zoom in to draw"}
+          <TraceTimeline traces={traces} />
         </div>
+      </div>
+
+      {/* Node detail panel */}
+      {selectedNode && (
+        <NodeDetail
+          node={selectedNode}
+          edges={edges}
+          onClose={() => setSelectedNodeId(null)}
+        />
       )}
-    </>
+    </div>
   );
 }

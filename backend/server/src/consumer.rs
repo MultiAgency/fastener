@@ -1,26 +1,26 @@
 use common::valkey;
-use common::DrawEvent;
+use common::TraceEvent;
 use redis::AsyncCommands;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::board::Board;
+use crate::graph_store::GraphStore;
 
 /// Two hours in milliseconds (for trimming the WS catch-up sorted set).
 const CATCHUP_RETENTION_MS: u64 = 7_200_000;
 
-/// Consume draw events from the Valkey queue and apply them to the board.
+/// Consume trace events from the Valkey queue and apply them to the graph store.
 pub async fn run(
     mut con: redis::aio::MultiplexedConnection,
-    board: Arc<RwLock<Board>>,
+    graph_store: Arc<RwLock<GraphStore>>,
     broadcast_tx: broadcast::Sender<String>,
 ) {
     tracing::info!("Consumer started");
 
     loop {
-        // RPOPLPUSH: atomically move from draw_queue to processing_queue
+        // RPOPLPUSH: atomically move from commit_queue to processing_queue
         let event_json: Option<String> = match redis::cmd("RPOPLPUSH")
-            .arg(valkey::DRAW_QUEUE)
+            .arg(valkey::COMMIT_QUEUE)
             .arg(valkey::PROCESSING_QUEUE)
             .query_async(&mut con)
             .await
@@ -36,18 +36,16 @@ pub async fn run(
         let event_json = match event_json {
             Some(json) => json,
             None => {
-                // Queue is empty, wait a bit
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                 continue;
             }
         };
 
         // Parse and apply
-        let event: DrawEvent = match serde_json::from_str(&event_json) {
+        let event: TraceEvent = match serde_json::from_str(&event_json) {
             Ok(e) => e,
             Err(e) => {
-                tracing::error!("Failed to parse draw event: {}", e);
-                // Remove from processing queue even if parse fails
+                tracing::error!("Failed to parse trace event: {}", e);
                 let _: () = con
                     .lrem(valkey::PROCESSING_QUEUE, 1, &event_json)
                     .await
@@ -56,36 +54,48 @@ pub async fn run(
             }
         };
 
-        // Apply to board
-        let (applied, newly_opened) = {
-            let mut board = board.write().await;
-            board.apply_event(&event).await
+        // Apply to graph store
+        let (applied, newly_activated) = {
+            let mut store = graph_store.write().await;
+            store.apply_trace_event(&event).await
         };
 
-        // Store in sorted set for WebSocket catch-up (trimmed to 2 hours)
+        // Store in sorted set for WebSocket catch-up
         if !applied.is_empty() {
             let ws_event = serde_json::json!({
-                "type": "draw",
-                "signer": event.predecessor_id,
+                "type": "trace",
+                "agent": event.agent_id,
                 "block_timestamp_ms": event.block_timestamp_ms,
-                "pixels": applied.iter().map(|p| {
-                    serde_json::json!({
-                        "x": p.x,
-                        "y": p.y,
-                        "color": format!("{:02X}{:02X}{:02X}", p.r, p.g, p.b),
-                        "owner_id": p.owner_id
-                    })
-                }).collect::<Vec<_>>()
+                "mutations": applied.iter().map(|m| {
+                    let mut obj = serde_json::json!({
+                        "op": m.op,
+                        "namespace": m.namespace,
+                        "agent_id": m.agent_id,
+                    });
+                    if let Some(ref node_id) = m.node_id {
+                        obj["node_id"] = serde_json::json!(node_id);
+                    }
+                    if let Some(ref edge) = m.edge {
+                        obj["edge"] = serde_json::json!(edge);
+                    }
+                    if !m.data.is_null() {
+                        obj["data"] = m.data.clone();
+                    }
+                    obj
+                }).collect::<Vec<_>>(),
+                "trace_context": event.trace_context,
             });
 
             let ws_json = ws_event.to_string();
 
-            // ZADD + trim + LREM in a single pipeline
             let two_hours_ago = event.block_timestamp_ms.saturating_sub(CATCHUP_RETENTION_MS);
             let _: () = redis::pipe()
-                .zadd(valkey::DRAW_EVENTS_ZSET, &ws_json, event.block_timestamp_ms as f64).ignore()
-                .zrembyscore(valkey::DRAW_EVENTS_ZSET, 0u64, two_hours_ago).ignore()
-                .lrem(valkey::PROCESSING_QUEUE, 1, &event_json).ignore()
+                .zadd(valkey::TRACE_EVENTS_ZSET, &ws_json, event.block_timestamp_ms as f64)
+                .ignore()
+                .zrembyscore(valkey::TRACE_EVENTS_ZSET, 0u64, two_hours_ago)
+                .ignore()
+                .lrem(valkey::PROCESSING_QUEUE, 1, &event_json)
+                .ignore()
                 .query_async(&mut con)
                 .await
                 .unwrap_or_default();
@@ -93,18 +103,15 @@ pub async fn run(
             // Broadcast to WebSocket subscribers
             let _ = broadcast_tx.send(ws_json);
 
-            // Broadcast newly opened regions
-            if !newly_opened.is_empty() {
-                let regions_event = serde_json::json!({
-                    "type": "regions_opened",
-                    "regions": newly_opened.iter().map(|(rx, ry)| {
-                        serde_json::json!({ "rx": rx, "ry": ry })
-                    }).collect::<Vec<_>>()
+            // Broadcast newly activated namespaces
+            if !newly_activated.is_empty() {
+                let ns_event = serde_json::json!({
+                    "type": "namespaces_activated",
+                    "namespaces": newly_activated,
                 });
-                let _ = broadcast_tx.send(regions_event.to_string());
+                let _ = broadcast_tx.send(ns_event.to_string());
             }
         } else {
-            // Remove from processing queue after successful processing
             let _: () = con
                 .lrem(valkey::PROCESSING_QUEUE, 1, &event_json)
                 .await

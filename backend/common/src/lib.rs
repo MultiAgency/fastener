@@ -1,6 +1,7 @@
-pub mod draw_event;
-pub mod region;
+pub mod graph;
+pub mod namespace;
+pub mod trace_event;
 pub mod valkey;
 
-pub use draw_event::*;
-pub use region::*;
+pub use graph::*;
+pub use trace_event::*;

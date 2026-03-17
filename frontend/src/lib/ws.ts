@@ -1,13 +1,13 @@
 import { WS_URL } from "./constants";
-import type { DrawEventWS, RegionsOpenedEvent, WSEvent } from "./types";
+import type { TraceEventWS, NamespacesActivatedEvent, WSEvent } from "./types";
 
-type DrawHandler = (event: DrawEventWS) => void;
-type RegionsOpenedHandler = (event: RegionsOpenedEvent) => void;
+type TraceHandler = (event: TraceEventWS) => void;
+type NamespacesActivatedHandler = (event: NamespacesActivatedEvent) => void;
 
 export class WebSocketClient {
   private ws: WebSocket | null = null;
-  private handlers: DrawHandler[] = [];
-  private regionsOpenedHandlers: RegionsOpenedHandler[] = [];
+  private traceHandlers: TraceHandler[] = [];
+  private namespacesActivatedHandlers: NamespacesActivatedHandler[] = [];
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTimestamp = 0;
 
@@ -18,7 +18,6 @@ export class WebSocketClient {
 
     this.ws.onopen = () => {
       console.log("WebSocket connected");
-      // Request catch-up if we have a last known timestamp
       if (this.lastTimestamp > 0) {
         this.ws!.send(
           JSON.stringify({
@@ -32,13 +31,13 @@ export class WebSocketClient {
     this.ws.onmessage = (e) => {
       try {
         const event: WSEvent = JSON.parse(e.data);
-        if (event.type === "draw") {
+        if (event.type === "trace") {
           this.lastTimestamp = Math.max(this.lastTimestamp, event.block_timestamp_ms);
-          for (const handler of this.handlers) {
+          for (const handler of this.traceHandlers) {
             handler(event);
           }
-        } else if (event.type === "regions_opened") {
-          for (const handler of this.regionsOpenedHandlers) {
+        } else if (event.type === "namespaces_activated") {
+          for (const handler of this.namespacesActivatedHandlers) {
             handler(event);
           }
         }
@@ -66,17 +65,19 @@ export class WebSocketClient {
     }, 2000);
   }
 
-  onDraw(handler: DrawHandler) {
-    this.handlers.push(handler);
+  onTrace(handler: TraceHandler) {
+    this.traceHandlers.push(handler);
     return () => {
-      this.handlers = this.handlers.filter((h) => h !== handler);
+      this.traceHandlers = this.traceHandlers.filter((h) => h !== handler);
     };
   }
 
-  onRegionsOpened(handler: RegionsOpenedHandler) {
-    this.regionsOpenedHandlers.push(handler);
+  onNamespacesActivated(handler: NamespacesActivatedHandler) {
+    this.namespacesActivatedHandlers.push(handler);
     return () => {
-      this.regionsOpenedHandlers = this.regionsOpenedHandlers.filter((h) => h !== handler);
+      this.namespacesActivatedHandlers = this.namespacesActivatedHandlers.filter(
+        (h) => h !== handler
+      );
     };
   }
 

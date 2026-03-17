@@ -8,7 +8,6 @@ use crate::api::AppState;
 pub async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Channel for sending messages to the client (from both broadcast and catch-up)
     let (tx, mut rx) = mpsc::channel::<String>(256);
 
     // Subscribe to broadcast channel
@@ -43,7 +42,6 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     });
 
-    // Wait for any task to finish
     tokio::select! {
         _ = broadcast_task => {},
         _ = send_task => {},
@@ -66,7 +64,7 @@ async fn handle_client_message(
             let since_ts = since as u64;
             let events: Vec<String> = valkey
                 .clone()
-                .zrangebyscore(common::valkey::DRAW_EVENTS_ZSET, since_ts, "+inf")
+                .zrangebyscore(common::valkey::TRACE_EVENTS_ZSET, since_ts, "+inf")
                 .await
                 .unwrap_or_default();
 

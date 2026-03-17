@@ -1,39 +1,56 @@
 import { API_BASE } from "./constants";
-import type { RegionCoord, RegionMeta } from "./types";
+import type { Node, Edge, NamespaceMeta, AgentStat } from "./types";
 
-export async function fetchRegion(rx: number, ry: number): Promise<{
-  data: ArrayBuffer;
-  lastUpdated: number;
-}> {
-  const res = await fetch(`${API_BASE}/api/region/${rx}/${ry}`);
-  const data = await res.arrayBuffer();
-  const lastUpdated = parseInt(res.headers.get("x-last-updated") || "0", 10);
-  return { data, lastUpdated };
-}
-
-export async function fetchRegionMeta(rx: number, ry: number): Promise<RegionMeta> {
-  const res = await fetch(`${API_BASE}/api/region/${rx}/${ry}/meta`);
+export async function fetchNamespace(ns: string): Promise<Node[]> {
+  const res = await fetch(`${API_BASE}/api/namespace/${encodeURIComponent(ns)}`);
   return res.json();
 }
 
-export async function fetchRegionsBatch(
-  coords: Array<[number, number]>
-): Promise<RegionMeta[]> {
-  const param = coords.map(([rx, ry]) => `${rx},${ry}`).join(",");
-  const res = await fetch(`${API_BASE}/api/regions?coords=${param}`);
+export async function fetchNamespaceMeta(ns: string): Promise<NamespaceMeta> {
+  const res = await fetch(`${API_BASE}/api/namespace/${encodeURIComponent(ns)}/meta`);
   return res.json();
 }
 
-export async function fetchOpenRegions(): Promise<RegionCoord[]> {
-  const res = await fetch(`${API_BASE}/api/open-regions`);
+export async function fetchNamespaceEdges(ns: string): Promise<Edge[]> {
+  const res = await fetch(`${API_BASE}/api/namespace/${encodeURIComponent(ns)}/edges`);
   return res.json();
 }
 
-/** Fetch fresh pixel timestamps (< 1hr old) for a region. Returns [[lx, ly, ts_ms], ...] */
-export async function fetchRegionTimestamps(
-  rx: number,
-  ry: number
-): Promise<Array<[number, number, number]>> {
-  const res = await fetch(`${API_BASE}/api/region/${rx}/${ry}/timestamps`);
+export async function fetchNode(ns: string, nodeId: string): Promise<Node> {
+  const res = await fetch(
+    `${API_BASE}/api/node/${encodeURIComponent(ns)}/${encodeURIComponent(nodeId)}`
+  );
   return res.json();
+}
+
+export async function fetchNeighbors(
+  ns: string,
+  nodeId: string
+): Promise<{ nodes: Node[]; edges: Edge[] }> {
+  const res = await fetch(
+    `${API_BASE}/api/graph/${encodeURIComponent(ns)}/neighbors/${encodeURIComponent(nodeId)}`
+  );
+  return res.json();
+}
+
+export async function fetchActiveNamespaces(): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/namespaces/active`);
+  return res.json();
+}
+
+export async function fetchAgentStats(): Promise<AgentStat[]> {
+  const res = await fetch(`${API_BASE}/api/stats/agents`);
+  return res.json();
+}
+
+export async function fetchRecentTraces(sinceMs?: number): Promise<unknown[]> {
+  const params = sinceMs ? `?since_ms=${sinceMs}` : "";
+  const res = await fetch(`${API_BASE}/api/trace/recent${params}`);
+  return res.json();
+}
+
+export async function resolveAgent(agentId: number): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/api/agent/${agentId}`);
+  if (!res.ok) return null;
+  return res.text();
 }

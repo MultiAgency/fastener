@@ -1,6 +1,6 @@
 use common::valkey;
-use common::DrawArgs;
-use common::DrawEvent;
+use common::CommitArgs;
+use common::TraceEvent;
 use fastnear_primitives::block_with_tx_hash::BlockWithTxHashes;
 use fastnear_primitives::near_primitives::views::{ActionView, ReceiptEnumView};
 use redis::AsyncCommands;
@@ -24,21 +24,18 @@ pub async fn process_blocks(
 
         let block_height = block.block.header.height;
         let block_timestamp = block.block.header.timestamp_nanosec;
-        let block_timestamp_ms = block_timestamp / 1_000_000; // Convert to milliseconds
+        let block_timestamp_ms = block_timestamp / 1_000_000;
 
         let mut events = Vec::new();
 
-        // Iterate through shards and receipt execution outcomes (maintains ordering)
         for shard in &block.shards {
             for outcome in &shard.receipt_execution_outcomes {
                 let receipt = &outcome.receipt;
 
-                // Filter: only receipts to our contract
                 if receipt.receiver_id.as_str() != contract_account {
                     continue;
                 }
 
-                // Extract predecessor_id and actions from the receipt
                 let actions = match &receipt.receipt {
                     ReceiptEnumView::Action {
                         actions, ..
@@ -48,38 +45,37 @@ pub async fn process_blocks(
 
                 let predecessor_id = receipt.predecessor_id.to_string();
 
-                // Find "draw" function calls
                 for action in actions {
                     if let ActionView::FunctionCall {
                         method_name, args, ..
                     } = action
                     {
-                        if method_name != "draw" {
+                        if method_name != "commit" {
                             continue;
                         }
 
-                        // args is FunctionArgs which derefs to Vec<u8> (raw JSON bytes)
-                        match serde_json::from_slice::<DrawArgs>(&args) {
-                            Ok(draw_args) => {
-                                // Validate pixels have valid hex colors
-                                let valid_pixels: Vec<_> = draw_args
-                                    .pixels
+                        match serde_json::from_slice::<CommitArgs>(&args) {
+                            Ok(commit_args) => {
+                                // Validate mutations have non-empty namespaces
+                                let valid_mutations: Vec<_> = commit_args
+                                    .mutations
                                     .into_iter()
-                                    .filter(|p| p.rgb().is_some())
+                                    .filter(|m| !m.namespace.is_empty())
                                     .collect();
 
-                                if !valid_pixels.is_empty() {
-                                    events.push(DrawEvent {
-                                        predecessor_id: predecessor_id.clone(),
+                                if !valid_mutations.is_empty() {
+                                    events.push(TraceEvent {
+                                        agent_id: predecessor_id.clone(),
                                         block_height,
                                         block_timestamp_ms,
-                                        pixels: valid_pixels,
+                                        mutations: valid_mutations,
+                                        trace_context: commit_args.trace_context,
                                     });
                                 }
                             }
                             Err(e) => {
                                 tracing::warn!(
-                                    "Failed to parse draw args at block {}: {}",
+                                    "Failed to parse commit args at block {}: {}",
                                     block_height,
                                     e
                                 );
@@ -90,7 +86,6 @@ pub async fn process_blocks(
             }
         }
 
-        // Push events to Valkey queue
         if !events.is_empty() {
             let serialized: Vec<String> = events
                 .iter()
@@ -99,22 +94,21 @@ pub async fn process_blocks(
 
             for event_json in &serialized {
                 let _: () = con
-                    .lpush(valkey::DRAW_QUEUE, event_json)
+                    .lpush(valkey::COMMIT_QUEUE, event_json)
                     .await
                     .unwrap_or_else(|e| {
-                        tracing::error!("Failed to LPUSH draw event: {}", e);
+                        tracing::error!("Failed to LPUSH trace event: {}", e);
                     });
             }
 
             tracing::info!(
-                "Block {}: pushed {} draw events ({} total pixels)",
+                "Block {}: pushed {} trace events ({} total mutations)",
                 block_height,
                 events.len(),
-                events.iter().map(|e| e.pixels.len()).sum::<usize>()
+                events.iter().map(|e| e.mutations.len()).sum::<usize>()
             );
         }
 
-        // Update last processed block
         let _: () = con
             .set(valkey::LAST_PROCESSED_BLOCK, block_height)
             .await

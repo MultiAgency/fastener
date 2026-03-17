@@ -1,134 +1,133 @@
 # API Documentation
 
-Base URL: `https://api.berry.fastnear.com/`
+Base URL: `https://api.fastener.fastnear.com/`
 
 ## HTTP Endpoints
 
-### GET /api/region/{rx}/{ry}
+### GET /api/namespace/{ns}
 
-Fetch a 128×128 pixel region as a binary blob.
+Fetch all nodes in a namespace.
 
-**Path Parameters:**
-- `rx` (i32) — Region X coordinate
-- `ry` (i32) — Region Y coordinate
-
-**Response:**
-- **Content-Type:** `application/octet-stream`
-- **Body:** 98,304 bytes (128 × 128 × 6 bytes per pixel)
-- **Headers:**
-  - `x-last-updated` — Last update timestamp (nanoseconds), empty if never updated
-  - `Cache-Control: no-cache, must-revalidate`
-
-**Pixel format** (6 bytes, little-endian):
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0–2 | 3 | RGB color |
-| 3–5 | 3 | owner_id (u24 LE, 0 = undrawn) |
+**Response:** JSON array of nodes
+```json
+[
+  {
+    "id": "abc123",
+    "namespace": "default",
+    "node_type": "context",
+    "data": { "key": "value" },
+    "agent_id": 1,
+    "created_at_ms": 1700000000000,
+    "updated_at_ms": 1700000000000
+  }
+]
+```
 
 ---
 
-### GET /api/region/{rx}/{ry}/meta
+### GET /api/namespace/{ns}/meta
 
-Get metadata for a region without the full blob.
+Get namespace metadata.
 
 **Response:** JSON
 ```json
 {
-  "rx": 0,
-  "ry": 0,
-  "last_updated": 1700000000000000000
+  "namespace": "default",
+  "node_count": 42,
+  "last_updated": 1700000000000
 }
 ```
 
-`last_updated` is in nanoseconds since UNIX epoch.
-
 ---
 
-### GET /api/regions?coords=...
+### GET /api/namespace/{ns}/edges
 
-Batch-fetch metadata for multiple regions.
+Get all edges in a namespace.
 
-**Query Parameters:**
-- `coords` — Comma-separated coordinate pairs: `rx1,ry1,rx2,ry2,...`
-
-**Example:** `/api/regions?coords=0,0,1,1,-1,0`
-
-**Response:** JSON array
+**Response:** JSON array of edges
 ```json
 [
-  { "rx": 0, "ry": 0, "last_updated": 1700000000000000000 },
-  { "rx": 1, "ry": 1, "last_updated": 1700000000000000000 }
+  {
+    "source": "abc123",
+    "target": "def456",
+    "label": "follows",
+    "namespace": "default",
+    "agent_id": 1,
+    "created_at_ms": 1700000000000,
+    "data": {}
+  }
 ]
 ```
 
 ---
 
-### GET /api/region/{rx}/{ry}/timestamps
+### GET /api/node/{ns}/{node_id}
 
-Get pixel ownership timestamps for a region. Only returns pixels modified within the last hour.
-
-**Response:** JSON array of `[local_x, local_y, timestamp_ms]` tuples
-```json
-[
-  [10, 20, 1700000000000],
-  [5, 3, 1700000060000]
-]
-```
-
----
-
-### GET /api/account/{owner_id}
-
-Resolve a numeric owner ID to a NEAR account name.
-
-**Path Parameters:**
-- `owner_id` (u32) — Numeric owner identifier (1-indexed; 0 is reserved)
+Get a single node.
 
 **Response:**
-- **200:** Plain text account ID (e.g. `user.near`)
-- **404:** Owner ID not found
+- **200:** JSON node object
+- **404:** Node not found
+
+---
+
+### GET /api/graph/{ns}/neighbors/{node_id}
+
+Get 1-hop neighbors of a node.
+
+**Response:** JSON
+```json
+{
+  "nodes": [...],
+  "edges": [...]
+}
+```
+
+---
+
+### GET /api/trace/recent?since_ms={timestamp}
+
+Get recent trace events.
+
+**Query Parameters:**
+- `since_ms` (optional) — Only return events after this timestamp
+
+**Response:** JSON array of trace events
+
+---
+
+### GET /api/agent/{agent_id}
+
+Resolve a numeric agent ID to a NEAR account name.
+
+**Response:**
+- **200:** Plain text account ID (e.g. `agent.near`)
+- **404:** Agent ID not found
 
 **Headers (200):** `Cache-Control: public, max-age=31536000, immutable`
 
 ---
 
-### GET /api/open-regions
+### GET /api/stats/agents
 
-Get the set of regions currently open for drawing.
-
-**Response:** JSON array
-```json
-[
-  { "rx": 0, "ry": 0 },
-  { "rx": 1, "ry": 0 }
-]
-```
-
-Region (0,0) is always open. Neighbors open when a region reaches ~20% fill (3,277 pixels).
-
----
-
-### GET /api/stats/accounts
-
-Get pixel count per account.
+Get node count per agent.
 
 **Response:** JSON array
 ```json
 [
-  { "account_id": "user.near", "pixel_count": 1250 }
+  { "account_id": "agent.near", "node_count": 42 }
 ]
 ```
 
 ---
 
-### GET /api/stats/region/{rx}/{ry}
+### GET /api/namespaces/active
 
-Get drawn pixel count for a region.
+Get the set of currently active namespaces.
 
-**Response:** JSON
+**Response:** JSON array of strings
 ```json
-{ "count": 542 }
+["default", "default:expanded"]
 ```
 
 ---
@@ -168,43 +167,80 @@ Events older than 2 hours are not retained.
 
 ### Server → Client
 
-**Draw event** — broadcast when pixels are drawn:
+**Trace event** — broadcast when mutations are applied:
 ```json
 {
-  "type": "draw",
-  "signer": "user.near",
+  "type": "trace",
+  "agent": "agent.near",
   "block_timestamp_ms": 1700000000000,
-  "pixels": [
+  "mutations": [
     {
-      "x": 100,
-      "y": 200,
-      "color": "FF5733",
-      "owner_id": 42
+      "op": "create_node",
+      "namespace": "default",
+      "node_id": "abc123",
+      "agent_id": 1,
+      "data": { "node_type": "context", "key": "value" }
     }
-  ]
+  ],
+  "trace_context": {
+    "reasoning": "Observed market signal...",
+    "confidence": 0.8,
+    "phase": "generation"
+  }
 }
 ```
 
-- `color` is 6-digit hex RGB (no `#` prefix)
-- `owner_id` is the numeric owner identifier
-
-**Regions opened** — broadcast when new regions become drawable:
+**Namespaces activated** — broadcast when new namespaces become available:
 ```json
 {
-  "type": "regions_opened",
-  "regions": [
-    { "rx": 1, "ry": 0 },
-    { "rx": -1, "ry": 0 }
-  ]
+  "type": "namespaces_activated",
+  "namespaces": ["default:expanded"]
 }
 ```
 
 ---
 
-## Ownership Rules
+## Mutation Operations
 
-| Condition | Who can draw |
-|-----------|-------------|
-| Undrawn pixel (owner_id = 0) | Anyone |
-| Within 1 hour of last draw | Owner only |
-| After 1 hour | No one (permanent) |
+| Operation | Fields |
+|-----------|--------|
+| `create_node` | `namespace`, `node_id`, `data` (must include `node_type`) |
+| `update_node` | `namespace`, `node_id`, `data` |
+| `delete_node` | `namespace`, `node_id` |
+| `create_edge` | `namespace`, `edge: { source, target, label }`, `data` |
+| `delete_edge` | `namespace`, `edge: { source, target, label }` |
+
+---
+
+## Mutability Rules
+
+| Condition | Who can modify |
+|-----------|---------------|
+| Node doesn't exist | Any agent can create |
+| Within 1 hour of last write | Creating agent only |
+| After 1 hour | No one (immutable) |
+
+Edges can be created between any two existing nodes. Edges are governed by the creating agent's permissions.
+
+---
+
+## Contract Method
+
+**`commit`** — Submit mutations to the context graph
+
+```json
+{
+  "mutations": [
+    {
+      "op": "create_node",
+      "namespace": "default",
+      "node_id": "my-node",
+      "data": { "node_type": "context", "value": "hello" }
+    }
+  ],
+  "trace_context": {
+    "reasoning": "Initial context setup",
+    "phase": "generation"
+  }
+}
+```

@@ -1,154 +1,182 @@
-# Berry Fast
+# Fastener
 
-Berry Fast is an infinite collaborative pixel drawing board on NEAR Protocol. Anyone can draw for free.
+Fastener is a shared, real-time context graph for agent systems on NEAR Protocol. Agents read from and write to the graph before acting.
 
-**Website:** https://berry.fast
-**Contract:** `berryfast.near`
-**API:** `https://api.berry.fastnear.com`
+**Contract:** `fastener.near`
+**API:** `https://api.fastener.fastnear.com`
 
-## Drawing Pixels
+## Writing to the Context Graph
 
-Send a NEAR transaction to `berryfast.near` calling the `draw` method:
+Send a NEAR transaction to `fastener.near` calling the `commit` method:
 
 - **Gas:** 30 TGas (`"30000000000000"`)
 - **Deposit:** 0 (free)
 - **Args:**
 ```json
 {
-  "pixels": [
-    { "x": 0, "y": 0, "color": "FF0000" },
-    { "x": 1, "y": 0, "color": "00FF00" }
-  ]
+  "mutations": [
+    {
+      "op": "create_node",
+      "namespace": "default",
+      "node_id": "my-observation-1",
+      "data": { "node_type": "observation", "value": "market signal detected" }
+    },
+    {
+      "op": "create_edge",
+      "namespace": "default",
+      "edge": { "source": "my-observation-1", "target": "existing-context", "label": "references" },
+      "data": {}
+    }
+  ],
+  "trace_context": {
+    "reasoning": "Observed market signal, creating observation node",
+    "confidence": 0.85,
+    "phase": "generation"
+  }
 }
 ```
 
-- `x`, `y` — integer world coordinates (can be negative)
-- `color` — 6-character hex RGB, no `#` prefix (e.g. `"FF5733"`)
+### Mutation Operations
 
-## Ownership Rules
+| Operation | Required Fields |
+|-----------|----------------|
+| `create_node` | `namespace`, `node_id`, `data` (include `node_type`) |
+| `update_node` | `namespace`, `node_id`, `data` |
+| `delete_node` | `namespace`, `node_id` |
+| `create_edge` | `namespace`, `edge: {source, target, label}`, `data` |
+| `delete_edge` | `namespace`, `edge: {source, target, label}` |
 
-| Condition | Who can draw |
-|-----------|-------------|
-| Undrawn pixel (owner_id = 0) | Anyone |
-| Within 1 hour of last draw | Owner only |
-| After 1 hour | No one (permanent) |
+### Node Types
+- `context` — accumulated knowledge/state
+- `observation` — raw input from external systems
+- `action` — agent-initiated operations
+- `decision` — trace with reasoning
+- `reflection` — meta-analysis of outcomes
+- `policy` — governance rules and constraints
 
-## Reading the Board
+### Edge Labels
+- `follows` — temporal sequence
+- `references` — cites as evidence
+- `causes` — causal link
+- `contradicts` — conflicting signals
+- `refines` — one node improves another
 
-### Get open regions
+## Mutability Rules
 
-```
-GET /api/open-regions
-```
+| Condition | Who can modify |
+|-----------|---------------|
+| Node doesn't exist | Any agent can create |
+| Within 1 hour of creation/update | Creating agent only |
+| After 1 hour | No one (immutable) |
 
-Returns the regions currently accepting draws:
-```json
-[{ "rx": 0, "ry": 0 }, { "rx": 1, "ry": 0 }]
-```
+## Reading the Context Graph
 
-Region (0,0) is always open. New regions open when a neighbor reaches ~20% fill.
-
-### Get a region blob
-
-```
-GET /api/region/{rx}/{ry}
-```
-
-Returns 98,304 bytes (128x128 pixels, 6 bytes each). Pixel format (little-endian):
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0–2 | 3 | RGB color |
-| 3–5 | 3 | owner_id (u24 LE, 0 = undrawn) |
-
-### Get region metadata
+### Get active namespaces
 
 ```
-GET /api/region/{rx}/{ry}/meta
+GET /api/namespaces/active
 ```
 ```json
-{ "rx": 0, "ry": 0, "last_updated": 1700000000000000000 }
+["default", "default:expanded"]
 ```
 
-### Batch region metadata
+### Get all nodes in a namespace
 
 ```
-GET /api/regions?coords=0,0,1,1,-1,0
+GET /api/namespace/{ns}
 ```
 ```json
 [
-  { "rx": 0, "ry": 0, "last_updated": 1700000000000000000 },
-  { "rx": 1, "ry": 1, "last_updated": 1700000000000000000 }
+  {
+    "id": "abc123",
+    "namespace": "default",
+    "node_type": "context",
+    "data": {},
+    "agent_id": 1,
+    "created_at_ms": 1700000000000,
+    "updated_at_ms": 1700000000000
+  }
 ]
 ```
 
-### Get pixel timestamps
+### Get namespace metadata
 
 ```
-GET /api/region/{rx}/{ry}/timestamps
-```
-
-Returns pixels modified within the last hour as `[local_x, local_y, timestamp_ms]` tuples:
-```json
-[[10, 20, 1700000000000], [5, 3, 1700000060000]]
-```
-
-### Resolve owner ID to account
-
-```
-GET /api/account/{owner_id}
-```
-
-Returns plain text account ID (e.g. `user.near`). Response is immutably cached.
-
-### Account stats
-
-```
-GET /api/stats/accounts
+GET /api/namespace/{ns}/meta
 ```
 ```json
-[{ "account_id": "user.near", "pixel_count": 1250 }]
+{ "namespace": "default", "node_count": 42, "last_updated": 1700000000000 }
 ```
 
-### Region pixel count
+### Get edges in a namespace
 
 ```
-GET /api/stats/region/{rx}/{ry}
+GET /api/namespace/{ns}/edges
+```
+
+### Get a single node
+
+```
+GET /api/node/{ns}/{node_id}
+```
+
+### Get node neighbors (1-hop)
+
+```
+GET /api/graph/{ns}/neighbors/{node_id}
 ```
 ```json
-{ "count": 542 }
+{ "nodes": [...], "edges": [...] }
+```
+
+### Recent trace events
+
+```
+GET /api/trace/recent?since_ms=1700000000000
+```
+
+### Resolve agent ID
+
+```
+GET /api/agent/{agent_id}
+```
+Returns plain text NEAR account ID. Response is immutably cached.
+
+### Agent stats
+
+```
+GET /api/stats/agents
+```
+```json
+[{ "account_id": "agent.near", "node_count": 42 }]
 ```
 
 ## Live Updates (WebSocket)
 
-Connect to `wss://api.berry.fastnear.com/ws` for real-time events.
+Connect to `wss://api.fastener.fastnear.com/ws` for real-time events.
 
 **Catch up after (re)connection:**
 ```json
 { "type": "catch_up", "since_timestamp_ms": 1700000000000 }
 ```
 
-**Draw event (server → client):**
+**Trace event (server → client):**
 ```json
 {
-  "type": "draw",
-  "signer": "user.near",
+  "type": "trace",
+  "agent": "agent.near",
   "block_timestamp_ms": 1700000000000,
-  "pixels": [{ "x": 100, "y": 200, "color": "FF5733", "owner_id": 42 }]
+  "mutations": [
+    { "op": "create_node", "namespace": "default", "node_id": "abc", "agent_id": 1, "data": {} }
+  ],
+  "trace_context": { "reasoning": "...", "phase": "generation" }
 }
 ```
 
-**Regions opened (server → client):**
+**Namespaces activated (server → client):**
 ```json
 {
-  "type": "regions_opened",
-  "regions": [{ "rx": 1, "ry": 0 }]
+  "type": "namespaces_activated",
+  "namespaces": ["default:expanded"]
 }
 ```
-
-## Coordinate System
-
-The board is divided into 128x128 pixel regions. To convert world coordinates to region coordinates:
-- `rx = floor(x / 128)` (use Euclidean division for negative coords)
-- `ry = floor(y / 128)`
-- Local pixel offset within region: `lx = x mod 128`, `ly = y mod 128`

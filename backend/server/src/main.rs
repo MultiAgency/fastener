@@ -1,7 +1,7 @@
 mod api;
-mod board;
 mod config;
 mod consumer;
+mod graph_store;
 mod ws;
 
 use std::sync::Arc;
@@ -35,35 +35,34 @@ async fn main() -> anyhow::Result<()> {
     let valkey_client = redis::Client::open(config.valkey_url.as_str())?;
     let valkey_con = valkey_client.get_multiplexed_async_connection().await?;
 
-    // Seed region (0,0) as open (idempotent)
+    // Seed "default" namespace as active (idempotent)
     let _: i64 = redis::cmd("SADD")
-        .arg(common::valkey::OPEN_REGIONS)
-        .arg("0:0")
+        .arg(common::valkey::ACTIVE_NAMESPACES)
+        .arg("default")
         .query_async(&mut valkey_con.clone())
         .await?;
 
     let (broadcast_tx, _) = broadcast::channel::<String>(4096);
 
-    let board = Arc::new(tokio::sync::RwLock::new(
-        board::Board::new(valkey_con.clone()),
+    let graph_store = Arc::new(tokio::sync::RwLock::new(
+        graph_store::GraphStore::new(valkey_con.clone()),
     ));
 
     let state = api::AppState {
-        board: board.clone(),
+        graph_store: graph_store.clone(),
         valkey: valkey_con.clone(),
         broadcast_tx: broadcast_tx.clone(),
     };
 
     // Start consumer task
-    let consumer_board = board.clone();
+    let consumer_store = graph_store.clone();
     let consumer_valkey = valkey_con.clone();
     let consumer_broadcast = broadcast_tx.clone();
     tokio::spawn(async move {
-        consumer::run(consumer_valkey, consumer_board, consumer_broadcast).await;
+        consumer::run(consumer_valkey, consumer_store, consumer_broadcast).await;
     });
 
-    let app = api::router(state)
-        .layer(CorsLayer::permissive());
+    let app = api::router(state).layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("Server listening on {}", config.listen_addr);

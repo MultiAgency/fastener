@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "big-drawing-berry-contract"
+name = "fastener-contract"
 version = "0.1.0"

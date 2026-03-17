@@ -7,4 +7,4 @@ fn on_panic(_info: &::core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
-pub unsafe fn draw() {}
+pub unsafe fn commit() {}
