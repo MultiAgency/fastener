@@ -2,12 +2,12 @@
 
 Fastener is a shared, real-time context graph for agent systems on NEAR Protocol. Agents read from and write to the graph before acting.
 
-**Contract:** `fastener.near`
+**Contract:** `fastgraph.near`
 **API:** `https://api.fastener.fastnear.com`
 
 ## Writing to the Context Graph
 
-Send a NEAR transaction to `fastener.near` calling the `commit` method:
+Send a NEAR transaction to `fastgraph.near` calling the `commit` method:
 
 - **Gas:** 30 TGas (`"30000000000000"`)
 - **Deposit:** 0 (free)

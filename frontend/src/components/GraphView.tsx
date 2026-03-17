@@ -1,9 +1,10 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useEffect } from "react";
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
+  useReactFlow,
   type Node as RFNode,
   type Edge as RFEdge,
   type NodeTypes,
@@ -11,6 +12,7 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import Dagre from "@dagrejs/dagre";
 import type { Node, Edge } from "../lib/types";
 
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -31,7 +33,8 @@ function ContextNode({ data }: { data: { label: string; nodeType: string; agentI
         border: `2px solid ${color}`,
         borderRadius: 8,
         padding: "8px 12px",
-        minWidth: 120,
+        minWidth: 140,
+        maxWidth: 220,
         fontSize: 12,
         color: "#e0e0e0",
       }}
@@ -64,6 +67,30 @@ const nodeTypes: NodeTypes = {
   context: ContextNode,
 };
 
+function layoutGraph(nodes: RFNode[], edges: RFEdge[]): RFNode[] {
+  if (nodes.length === 0) return nodes;
+
+  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: "TB", nodesep: 60, ranksep: 80 });
+
+  for (const node of nodes) {
+    g.setNode(node.id, { width: 180, height: 70 });
+  }
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
+  }
+
+  Dagre.layout(g);
+
+  return nodes.map((node) => {
+    const pos = g.node(node.id);
+    return {
+      ...node,
+      position: { x: pos.x - 90, y: pos.y - 35 },
+    };
+  });
+}
+
 interface GraphViewProps {
   nodes: Node[];
   edges: Edge[];
@@ -71,29 +98,13 @@ interface GraphViewProps {
   onSelectNode: (nodeId: string | null) => void;
 }
 
-export default function GraphView({
+function GraphViewInner({
   nodes,
   edges,
   selectedNodeId,
   onSelectNode,
 }: GraphViewProps) {
-  const rfNodes: RFNode[] = useMemo(() => {
-    const cols = Math.max(Math.ceil(Math.sqrt(nodes.length)), 1);
-    return nodes.map((node, i) => ({
-      id: node.id,
-      type: "context",
-      position: {
-        x: (i % cols) * 200,
-        y: Math.floor(i / cols) * 120,
-      },
-      data: {
-        label: node.id,
-        nodeType: node.node_type,
-        agentId: node.agent_id,
-      },
-      selected: node.id === selectedNodeId,
-    }));
-  }, [nodes, selectedNodeId]);
+  const { fitView } = useReactFlow();
 
   const rfEdges: RFEdge[] = useMemo(
     () =>
@@ -102,12 +113,34 @@ export default function GraphView({
         source: edge.source,
         target: edge.target,
         label: edge.label,
-        style: { stroke: "#4a4a6a" },
+        style: { stroke: "#4a4a6a", strokeWidth: 1.5 },
         labelStyle: { fill: "#888", fontSize: 10 },
         animated: true,
       })),
     [edges]
   );
+
+  const rfNodes: RFNode[] = useMemo(() => {
+    const raw = nodes.map((node) => ({
+      id: node.id,
+      type: "context" as const,
+      position: { x: 0, y: 0 },
+      data: {
+        label: node.id,
+        nodeType: node.node_type,
+        agentId: node.agent_id,
+      },
+      selected: node.id === selectedNodeId,
+    }));
+    return layoutGraph(raw, rfEdges);
+  }, [nodes, selectedNodeId, rfEdges]);
+
+  // Auto-fit when nodes change
+  useEffect(() => {
+    if (nodes.length > 0) {
+      setTimeout(() => fitView({ padding: 0.3, duration: 400 }), 50);
+    }
+  }, [nodes.length, fitView]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: RFNode) => {
@@ -121,26 +154,32 @@ export default function GraphView({
   }, [onSelectNode]);
 
   return (
+    <ReactFlow
+      nodes={rfNodes}
+      edges={rfEdges}
+      nodeTypes={nodeTypes}
+      onNodeClick={onNodeClick}
+      onPaneClick={onPaneClick}
+      fitView
+      proOptions={{ hideAttribution: true }}
+      style={{ background: "#0a0a0f" }}
+    >
+      <Background color="#1a1a2e" gap={20} />
+      <Controls
+        style={{ background: "#1a1a2e", borderColor: "#2a2a4a" }}
+      />
+      <MiniMap
+        nodeColor={(n) => NODE_TYPE_COLORS[n.data?.nodeType as string] || "#6b7280"}
+        style={{ background: "#0f0f1a" }}
+      />
+    </ReactFlow>
+  );
+}
+
+export default function GraphView(props: GraphViewProps) {
+  return (
     <div style={{ width: "100%", height: "100%" }}>
-      <ReactFlow
-        nodes={rfNodes}
-        edges={rfEdges}
-        nodeTypes={nodeTypes}
-        onNodeClick={onNodeClick}
-        onPaneClick={onPaneClick}
-        fitView
-        proOptions={{ hideAttribution: true }}
-        style={{ background: "#0a0a0f" }}
-      >
-        <Background color="#1a1a2e" gap={20} />
-        <Controls
-          style={{ background: "#1a1a2e", borderColor: "#2a2a4a" }}
-        />
-        <MiniMap
-          nodeColor={(n) => NODE_TYPE_COLORS[n.data?.nodeType as string] || "#6b7280"}
-          style={{ background: "#0f0f1a" }}
-        />
-      </ReactFlow>
+      <GraphViewInner {...props} />
     </div>
   );
 }

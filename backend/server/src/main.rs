@@ -7,6 +7,7 @@ mod ws;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 
 async fn shutdown_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
@@ -62,7 +63,15 @@ async fn main() -> anyhow::Result<()> {
         consumer::run(consumer_valkey, consumer_store, consumer_broadcast).await;
     });
 
-    let app = api::router(state).layer(CorsLayer::permissive());
+    // Serve frontend static files from ../frontend/dist/ with SPA fallback
+    let frontend_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../frontend/dist");
+    let serve_dir = ServeDir::new(&frontend_dir)
+        .not_found_service(ServeFile::new(frontend_dir.join("index.html")));
+
+    let app = api::router(state)
+        .fallback_service(serve_dir)
+        .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("Server listening on {}", config.listen_addr);

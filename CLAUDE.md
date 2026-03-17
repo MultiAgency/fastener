@@ -51,7 +51,7 @@ NEAR blockchain → Indexer → Valkey queue → Server → WebSocket → Fronte
 
 **Contract** (`contract/`): Minimal — single `commit()` method with empty body. Exists only so transactions can be sent; the indexer reads args directly from chain data.
 
-**Indexer** (`backend/indexer/`): Streams blocks via `fastnear-neardata-fetcher`, filters receipts to `fastener.near` with method `commit`, validates mutation JSON, LPUSHes `TraceEvent` to Valkey `commit_queue`. Imports types from `fastnear_primitives`.
+**Indexer** (`backend/indexer/`): Streams blocks via `fastnear-neardata-fetcher`, filters receipts to `fastgraph.near` with method `commit`, validates mutation JSON, LPUSHes `TraceEvent` to Valkey `commit_queue`. Imports types from `fastnear_primitives`.
 
 **Server** (`backend/server/`): Axum HTTP/WS server. Consumer task RPOPLPUSHes from `commit_queue` to `processing_queue`, applies trace events to graph (mutability rules), broadcasts via `tokio::sync::broadcast`, LREMs after success. Serves graph data over REST and streams trace events over WebSocket.
 
@@ -123,6 +123,6 @@ Each NEAR account gets a u32 index assigned on first commit (starting at 1; 0 is
 
 ## Environment Variables
 
-- `CONTRACT_ID` — NEAR contract account (default: `fastener.near`), used by indexer
+- `CONTRACT_ID` — NEAR contract account (default: `fastgraph.near`), used by indexer
 - `VALKEY_URL` — Valkey connection (default: `redis://127.0.0.1:6379`), used by both indexer and server
 - `LISTEN_ADDR` — Server listen address (default: `0.0.0.0:3000`)

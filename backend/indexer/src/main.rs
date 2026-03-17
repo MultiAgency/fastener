@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let contract_account = std::env::var("CONTRACT_ID").unwrap_or_else(|_| "fastener.near".into());
+    let contract_account = std::env::var("CONTRACT_ID").unwrap_or_else(|_| "fastgraph.near".into());
     let valkey_url = std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
     let client = redis::Client::open(valkey_url)?;
     let mut con = client.get_multiplexed_async_connection().await?;
@@ -30,6 +30,14 @@ async fn main() -> anyhow::Result<()> {
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
     });
+
+    if start_block.is_none() {
+        tracing::error!(
+            "No last_processed_block in Valkey and no START_BLOCK_HEIGHT env var set. \
+             Set START_BLOCK_HEIGHT to a recent mainnet block height (see https://nearblocks.io)."
+        );
+        anyhow::bail!("START_BLOCK_HEIGHT required for first run");
+    }
 
     tracing::info!(
         "Starting indexer from block {:?} for contract {}",
