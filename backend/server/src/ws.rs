@@ -56,7 +56,10 @@ async fn handle_client_message(
 ) {
     let msg: serde_json::Value = match serde_json::from_str(text) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(e) => {
+            tracing::debug!("Invalid WebSocket message: {}", e);
+            return;
+        }
     };
 
     if msg.get("type").and_then(|t| t.as_str()) == Some("catch_up") {

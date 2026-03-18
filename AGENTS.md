@@ -1,15 +1,35 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Project Overview
+
+Fastener is a shared, real-time context graph for AI agent systems on NEAR Protocol. Agents commit graph mutations (nodes and edges) as NEAR transactions, which are indexed, validated, and served over WebSocket to a React-based visualization frontend. Think of it as a shared memory layer where multiple agents can read and write structured context.
+
+**Key concept:** Agents don't talk to each other directly — they coordinate through the graph. Each agent commits nodes (observations, decisions, actions, etc.) and edges (relationships between them), creating a shared situational awareness layer.
+
+## Prerequisites
+
+- **Rust** (stable, 2021 edition) with `wasm32-unknown-unknown` target for contract builds
+- **Node.js** ≥ 18 with npm
+- **Docker** for Valkey (Redis-compatible store)
+- NEAR CLI (optional, for contract deployment)
+
+```bash
+# One-time setup
+rustup target add wasm32-unknown-unknown
+cd frontend && npm install
+docker compose up -d                # Start Valkey on port 6379
+```
 
 ## Build & Run Commands
 
 ### Backend (Rust workspace)
 
 ```bash
-cd backend && cargo build          # Build all: common, indexer, server
+cd backend && cargo build              # Build all: common, indexer, server
 cd backend && cargo build -p server    # Build only the server
 cd backend && cargo build -p indexer   # Build only the indexer
+cd backend && cargo run -p server      # Run the server (port 3000)
+cd backend && cargo run -p indexer     # Run the indexer
 ```
 
 ### Contract (NEAR wasm)
@@ -33,15 +53,20 @@ cd frontend && npm run build       # Production build (runs tsc + vite)
 docker compose up                  # Start Valkey (Redis-compatible) on port 6379
 ```
 
-### Type checking
+## Testing & Verification
 
 ```bash
-cd frontend && ./node_modules/.bin/tsc --noEmit
+cd backend && cargo check              # Fast type-check all Rust code
+cd backend && cargo clippy             # Lint Rust code
+cd frontend && npx tsc --noEmit        # Type-check frontend
+cd frontend && npm run build           # Full production build (tsc + vite)
 ```
+
+No test suite exists yet. Verify changes by building successfully and checking behavior against a running Valkey instance.
 
 ## Architecture
 
-Shared real-time context graph for agent systems on NEAR Protocol. Four components connected via Valkey (Redis-compatible):
+Shared real-time context graph. Four components connected via Valkey (Redis-compatible):
 
 ```
 NEAR blockchain → Indexer → Valkey queue → Server → WebSocket → Frontend
@@ -56,6 +81,24 @@ NEAR blockchain → Indexer → Valkey queue → Server → WebSocket → Fronte
 **Server** (`backend/server/`): Axum HTTP/WS server. Consumer task RPOPLPUSHes from `commit_queue` to `processing_queue`, applies trace events to graph (mutability rules), broadcasts via `tokio::sync::broadcast`, LREMs after success. Serves graph data over REST and streams trace events over WebSocket.
 
 **Frontend** (`frontend/`): Vite/React app with React Flow (`@xyflow/react`) for graph visualization. Uses `@hot-labs/near-connect` for wallet connection and transaction signing. WebSocket for live trace event updates.
+
+## Code Style
+
+- **Rust**: Edition 2021, use `anyhow` for error handling, `tracing` for logging. Follow standard `cargo fmt` / `cargo clippy` conventions.
+- **Frontend**: TypeScript strict mode, React 19, functional components only. Use npm (not yarn).
+- **Naming**: Rust uses snake_case, TypeScript uses camelCase for variables and PascalCase for components.
+- **Commits**: Keep commit messages concise, focused on the "why."
+
+## Security & Mutability Rules
+
+The graph enforces write-access rules in `backend/server/src/graph_store.rs`:
+
+1. **Node doesn't exist** → any agent can create
+2. **Within 1 hour of last write** → only the creating agent can modify
+3. **After 1 hour** → node is immutable
+4. **No timestamp found** → treated as immutable
+
+These rules are critical — do not weaken or bypass them. They prevent agents from overwriting each other's context.
 
 ## Data Model
 
@@ -91,13 +134,6 @@ Each `commit` transaction contains an array of mutations:
 
 A `TraceEvent` wraps mutations with agent identity and block metadata, plus optional `trace_context` for decision reasoning.
 
-### Mutability Rules (enforced in `graph_store.rs`)
-
-1. Node doesn't exist: any agent can create
-2. Within 1 hour of last write: only the creating agent can modify
-3. After 1 hour: node is immutable
-4. No timestamp found: treated as immutable
-
 ### Namespaces
 
 Named partitions of the graph. `default` is always active. When a namespace reaches 100+ nodes, expansion namespaces are auto-activated.
@@ -110,6 +146,7 @@ Each NEAR account gets a u32 index assigned on first commit (starting at 1; 0 is
 
 - `commit_queue` / `processing_queue` — reliable queue pattern (RPOPLPUSH + LREM)
 - `node//{ns}//{id}` — individual node JSON (uses `//` delimiter to avoid key collisions)
+- `ns_nodes//{ns}` — set of node IDs in a namespace (for efficient listing without SCAN)
 - `edges//{ns}` — sorted set of edge JSON (score=created_at_ms)
 - `adj//{ns}//{node_id}` / `adj_in//{ns}//{node_id}` — namespace-scoped adjacency sets
 - `node_ts//{ns}` — sorted set of node timestamps (score=last_updated_ms, member=node_id)

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { WebSocketClient } from "../lib/ws";
 import { fetchNamespace, fetchNamespaceEdges, fetchActiveNamespaces } from "../lib/api";
 import type { Node, Edge, TraceEventWS } from "../lib/types";
@@ -40,7 +40,7 @@ export function useGraph(activeNamespace: string) {
     const ws = new WebSocketClient();
     ws.connect();
 
-    ws.onTrace((event: TraceEventWS) => {
+    const unsubTrace = ws.onTrace((event: TraceEventWS) => {
       setTraces((prev) => [...prev.slice(-99), event]);
 
       for (const mutation of event.mutations) {
@@ -111,25 +111,16 @@ export function useGraph(activeNamespace: string) {
       }
     });
 
-    ws.onNamespacesActivated((event) => {
+    const unsubNs = ws.onNamespacesActivated((event) => {
       setNamespaces((prev) => [...new Set([...prev, ...event.namespaces])]);
     });
 
-    return () => ws.disconnect();
+    return () => {
+      unsubTrace();
+      unsubNs();
+      ws.disconnect();
+    };
   }, []); // stable — no dependency on activeNamespace
 
-  const refresh = useCallback(() => {
-    if (!activeNamespace) return;
-    Promise.all([
-      fetchNamespace(activeNamespace),
-      fetchNamespaceEdges(activeNamespace),
-    ])
-      .then(([n, e]) => {
-        setNodes(n);
-        setEdges(e);
-      })
-      .catch(console.error);
-  }, [activeNamespace]);
-
-  return { nodes, edges, namespaces, traces, refresh };
+  return { nodes, edges, namespaces, traces };
 }

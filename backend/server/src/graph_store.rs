@@ -161,6 +161,10 @@ impl GraphStore {
 
         let mut pipe = redis::pipe();
         pipe.set(valkey::node_key(ns, node_id), &node_json).ignore();
+        pipe.cmd("SADD")
+            .arg(valkey::ns_nodes_key(ns))
+            .arg(node_id.as_str())
+            .ignore();
         pipe.cmd("ZADD")
             .arg(valkey::node_ts_key(ns))
             .arg(event.block_timestamp_ms as f64)
@@ -317,6 +321,10 @@ impl GraphStore {
         }
 
         pipe.del(valkey::node_key(ns, node_id)).ignore();
+        pipe.cmd("SREM")
+            .arg(valkey::ns_nodes_key(ns))
+            .arg(node_id.as_str())
+            .ignore();
         pipe.cmd("ZREM")
             .arg(valkey::node_ts_key(ns))
             .arg(node_id.as_str())
@@ -507,44 +515,34 @@ impl GraphStore {
         json.and_then(|j| serde_json::from_str(&j).ok())
     }
 
-    /// Get all nodes in a namespace by scanning node:{ns}:* keys.
+    /// Get all nodes in a namespace using the ns_nodes set for O(1) key lookup.
     pub async fn get_namespace_nodes(&mut self, ns: &str) -> Vec<Node> {
-        let pattern = format!("node//{}//*", ns);
-        let mut cursor: u64 = 0;
-        let mut nodes = Vec::new();
+        let node_ids: Vec<String> = self
+            .valkey
+            .smembers(valkey::ns_nodes_key(ns))
+            .await
+            .unwrap_or_default();
 
-        loop {
-            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(&pattern)
-                .arg("COUNT")
-                .arg(200)
-                .query_async(&mut self.valkey)
-                .await
-                .unwrap_or((0, vec![]));
-
-            if !keys.is_empty() {
-                let values: Vec<Option<String>> = redis::cmd("MGET")
-                    .arg(&keys)
-                    .query_async(&mut self.valkey)
-                    .await
-                    .unwrap_or_default();
-
-                for val in values.into_iter().flatten() {
-                    if let Ok(node) = serde_json::from_str::<Node>(&val) {
-                        nodes.push(node);
-                    }
-                }
-            }
-
-            cursor = next_cursor;
-            if cursor == 0 {
-                break;
-            }
+        if node_ids.is_empty() {
+            return Vec::new();
         }
 
-        nodes
+        let keys: Vec<String> = node_ids
+            .iter()
+            .map(|id| valkey::node_key(ns, id))
+            .collect();
+
+        let values: Vec<Option<String>> = redis::cmd("MGET")
+            .arg(&keys)
+            .query_async(&mut self.valkey)
+            .await
+            .unwrap_or_default();
+
+        values
+            .into_iter()
+            .flatten()
+            .filter_map(|v| serde_json::from_str::<Node>(&v).ok())
+            .collect()
     }
 
     /// Get all edges in a namespace.
@@ -563,7 +561,7 @@ impl GraphStore {
             .collect()
     }
 
-    /// Get neighbors of a node (1-hop outbound).
+    /// Get neighbors of a node (1-hop outbound) with full edge metadata.
     pub async fn get_neighbors(&mut self, ns: &str, node_id: &str) -> (Vec<Node>, Vec<Edge>) {
         let adj_members: Vec<String> = self
             .valkey
@@ -571,13 +569,32 @@ impl GraphStore {
             .await
             .unwrap_or_default();
 
+        if adj_members.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+
+        // Collect neighbor IDs from adjacency set
+        let neighbor_ids: Vec<(&str, &str)> = adj_members
+            .iter()
+            .filter_map(|m| m.split_once('\0'))
+            .collect();
+
+        // Fetch full edge data from the edges sorted set to get real metadata
+        let all_edges = self.get_namespace_edges(ns).await;
+
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
 
-        for member in &adj_members {
-            if let Some((label, target_id)) = member.split_once('\0') {
-                if let Some(node) = self.get_node(ns, target_id).await {
-                    edges.push(Edge {
+        for (label, target_id) in &neighbor_ids {
+            if let Some(node) = self.get_node(ns, target_id).await {
+                // Find the matching edge with full metadata
+                let full_edge = all_edges.iter().find(|e| {
+                    e.source == node_id && e.target == *target_id && e.label == *label
+                });
+
+                edges.push(match full_edge {
+                    Some(e) => e.clone(),
+                    None => Edge {
                         source: node_id.to_string(),
                         target: target_id.to_string(),
                         label: label.to_string(),
@@ -585,9 +602,9 @@ impl GraphStore {
                         agent_id: 0,
                         created_at_ms: 0,
                         data: serde_json::Value::Null,
-                    });
-                    nodes.push(node);
-                }
+                    },
+                });
+                nodes.push(node);
             }
         }
 

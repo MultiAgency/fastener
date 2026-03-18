@@ -56,11 +56,19 @@ pub async fn process_blocks(
 
                         match serde_json::from_slice::<CommitArgs>(&args) {
                             Ok(commit_args) => {
-                                // Validate mutations have non-empty namespaces
+                                // Validate mutation fields
                                 let valid_mutations: Vec<_> = commit_args
                                     .mutations
                                     .into_iter()
-                                    .filter(|m| !m.namespace.is_empty())
+                                    .filter(|m| {
+                                        valkey::is_valid_id(&m.namespace)
+                                            && m.node_id.as_ref().map_or(true, |id| valkey::is_valid_id(id))
+                                            && m.edge.as_ref().map_or(true, |e| {
+                                                valkey::is_valid_id(&e.source)
+                                                    && valkey::is_valid_id(&e.target)
+                                                    && valkey::is_valid_id(&e.label)
+                                            })
+                                    })
                                     .collect();
 
                                 if !valid_mutations.is_empty() {

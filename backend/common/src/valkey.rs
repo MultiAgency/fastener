@@ -55,3 +55,19 @@ pub fn adj_key(ns: &str, node_id: &str) -> String {
 pub fn adj_in_key(ns: &str, node_id: &str) -> String {
     format!("adj_in//{ns}//{node_id}")
 }
+
+/// Build the Valkey key for a namespace's node-id set (tracks all node IDs in the namespace).
+pub fn ns_nodes_key(ns: &str) -> String {
+    format!("ns_nodes//{ns}")
+}
+
+/// Maximum allowed length for namespace and node_id strings.
+pub const MAX_ID_LEN: usize = 256;
+
+/// Validate that a namespace or node_id is safe for use in Valkey keys.
+/// Returns true if valid. Only allows printable ASCII: alphanumeric, `-`, `_`, `.`, `:`.
+pub fn is_valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ID_LEN
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b':')
+}
